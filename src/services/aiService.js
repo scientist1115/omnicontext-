@@ -29,7 +29,7 @@ async function callModel(messages, maxTokens = 2000) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-const SIM_DOMAIN_GUIDE = `사용 가능한 시뮬레이션 도메인 (셋 중 하나만 선택, 해당 없으면 null):
+const SIM_DOMAIN_GUIDE = `사용 가능한 시뮬레이션 도메인 (넷 중 하나만 선택, 해당 없으면 null):
 
 1. thermal_1d (1D 비정상 열전도)
    params: { length_m, n_nodes, thermal_diffusivity_m2s, initial_temp_c,
@@ -45,8 +45,15 @@ const SIM_DOMAIN_GUIDE = `사용 가능한 시뮬레이션 도메인 (셋 중 �
              load_type: "point"|"distributed",
              load_n?, load_position_m?, load_n_per_m? }
 
-이 세 도메인은 모두 단순화된 1D/2D 이상화 모델입니다 (진짜 3D CFD/FEA가 아님).
-논문 내용이 이 중 하나로 대략이라도 환원 가능하면 시도하고, 완전히 무관하면(예: 소프트웨어 알고리즘 논문, 생물학 논문 등) simulatable: false로 답하세요.`;
+4. risk_probability (위험 요인 조합에 따른 확률 몬테카를로 시뮬레이션 - 실제 통계 아님, 가정치 기반)
+   params: { trials?(기본 100000), base_probability(0~1),
+             factors: [{ name, odds_multiplier(이 요인이 있으면 승산이 몇 배가 되는지 가정),
+                          uncertainty_pct?(가정치의 불확실성, 기본 0), prevalence?(이 요인이 적용될 확률, 기본 1.0) }] }
+   주의: base_probability와 각 factor의 odds_multiplier는 실제 통계가 아니라 합리적으로 추정한 가정치여야 하며,
+   그 사실을 reasoning에 명시하세요.
+
+1~3은 단순화된 1D/2D 물리 이상화 모델(진짜 3D CFD/FEA 아님), 4는 가정 기반 확률 추정 모델입니다.
+셋 다 완전히 무관하면(예: 순수 알고리즘/수학 증명 등 물리·확률로 환원 불가능한 내용) simulatable: false로 답하세요.`;
 
 /**
  * 새 논문이 위 세 시뮬레이션 도메인 중 하나로 검증 가능한지 판단하고,
@@ -69,6 +76,37 @@ ${SIM_DOMAIN_GUIDE}
 {"simulatable": true/false, "domain": "thermal_1d 등 또는 null", "params": {...} 또는 null, "reasoning": "판단 이유 한 문장"}`;
 
   const result = await callModel([{ role: 'user', content: prompt }], 800);
+  try {
+    const cleaned = result.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
+    return JSON.parse(cleaned);
+  } catch (e) {
+    return { simulatable: false, domain: null, params: null, reasoning: 'AI 응답 파싱 실패' };
+  }
+}
+
+/**
+ * 사용자가 채팅에서 직접 시뮬레이션을 요청했는지 판단하고 파라미터를 추출합니다.
+ * (논문 자동 분석용 extractSimulationSpec와 별개로, 사용자가 "~해봐", "계산해줘" 등으로
+ * 직접 요청했을 때 쓰입니다.)
+ * @returns {Promise<{simulatable: boolean, domain?: string, params?: object, reasoning: string}>}
+ */
+export async function extractChatSimulationRequest(topicName, userMessage) {
+  const prompt = `당신은 사용자의 채팅 메시지가 "실제로 시뮬레이션을 돌려달라"는 요청인지 판단하는 역할입니다.
+
+${SIM_DOMAIN_GUIDE}
+
+주제: ${topicName}
+사용자 메시지: "${userMessage}"
+
+이 메시지가 위 네 도메인 중 하나로 실제 계산 가능한 시뮬레이션 요청이면, 메시지에 나온 조건을 최대한 반영하고
+부족한 값은 상식적으로 합리적인 값으로 채워서 파라미터를 만드세요. risk_probability의 경우 메시지에 언급된
+위험 요인들을 factors로, 명시 안 된 odds_multiplier는 일반적으로 알려진 수준으로 합리적으로 추정하세요.
+단순 질문(설명해줘, 어떻게 생각해? 등)이면 simulatable: false로 답하세요.
+
+반드시 아래 JSON 형식으로만 답하세요 (다른 설명 없이):
+{"simulatable": true/false, "domain": "risk_probability 등 또는 null", "params": {...} 또는 null, "reasoning": "판단 이유이자 어떤 가정을 썼는지 한두 문장"}`;
+
+  const result = await callModel([{ role: 'user', content: prompt }], 1000);
   try {
     const cleaned = result.trim().replace(/^```json\s*/i, '').replace(/```\s*$/, '');
     return JSON.parse(cleaned);
@@ -142,10 +180,16 @@ ${sourcesText}
 }
 
 /**
- * 사용자와의 일반 대화 응답 (채팅창용)
+ * 사용자와의 일반 대화 응답 (채팅창용).
+ * simulationResult가 주어지면 그 실제 계산 결과를 바탕으로 답하고,
+ * 없으면 일반 대화로 답합니다.
  */
-export async function chatReply(topicName, currentDoc, history, userMessage) {
+export async function chatReply(topicName, currentDoc, history, userMessage, simulationResult = null) {
   const historyText = history.map((h) => `${h.role === 'user' ? '사용자' : 'AI'}: ${h.content}`).join('\n');
+
+  const simText = simulationResult
+    ? `\n\n방금 사용자의 요청으로 실제 시뮬레이터를 실행했습니다. 아래는 그 실제 계산 결과입니다. 이 숫자만 사용해서 답변하세요 (지어내지 마세요):\n${JSON.stringify(simulationResult, null, 2)}\n이 결과가 어떤 가정 위에서 계산된 것인지, 그리고 그 가정이 달라지면 결과도 달라질 수 있다는 점을 답변에 자연스럽게 포함하세요.`
+    : '';
 
   const prompt = `당신은 "${topicName}" 주제를 전담하는 리서치 어시스턴트입니다. 현재 이 주제의 문서 내용은 다음과 같습니다:
 
@@ -156,7 +200,7 @@ ${currentDoc || '(아직 문서 내용 없음)'}
 지금까지의 대화:
 ${historyText || '(대화 없음)'}
 
-사용자의 새 메시지: ${userMessage}
+사용자의 새 메시지: ${userMessage}${simText}
 
 이 맥락을 바탕으로 자연스럽게 답변하세요.`;
 

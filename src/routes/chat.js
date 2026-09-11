@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../db/index.js';
-import { chatReply } from '../services/aiService.js';
+import { chatReply, extractChatSimulationRequest } from '../services/aiService.js';
+import { runSimulation } from '../services/simulationService.js';
 
 const router = express.Router();
 
@@ -33,13 +34,33 @@ router.post('/:topicId', async (req, res) => {
   );
 
   try {
-    const reply = await chatReply(topic.name, docRow?.content || '', history, message);
+    // 사용자가 실제 시뮬레이션 실행을 요청한 건지 먼저 판단
+    let simulationResult = null;
+    try {
+      const spec = await extractChatSimulationRequest(topic.name, message);
+      if (spec.simulatable && spec.domain && spec.params) {
+        const result = await runSimulation({ domain: spec.domain, params: spec.params });
+        simulationResult = { domain: spec.domain, reasoning: spec.reasoning, result };
+
+        if (!result.error) {
+          db.prepare(
+            `INSERT INTO simulations (topic_id, source_title, source_url, domain, reasoning, result_json)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).run(topicId, message.slice(0, 120), null, spec.domain, spec.reasoning, JSON.stringify(result));
+        }
+      }
+    } catch (simErr) {
+      console.error('[채팅] 시뮬레이션 요청 처리 실패:', simErr.message);
+      // 시뮬레이션 판단/실행이 실패해도 일반 대화 응답은 계속 진행
+    }
+
+    const reply = await chatReply(topic.name, docRow?.content || '', history, message, simulationResult);
     db.prepare('INSERT INTO chat_messages (topic_id, role, content) VALUES (?, ?, ?)').run(
       topicId,
       'assistant',
       reply
     );
-    res.json({ reply });
+    res.json({ reply, simulationRan: !!simulationResult });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -6,6 +6,8 @@ OmniContext 단순화 공학 시뮬레이터
   - thermal_1d      : 1D 비정상 열전도 (유한차분법, explicit scheme)
   - electrical_dc    : 저항망 DC 회로 (노드 전압법, 선형대수)
   - mechanical_beam  : 보(beam) 처짐 (Euler-Bernoulli 이론식)
+  - risk_probability : 위험 요인 조합에 따른 확률 몬테카를로 시뮬레이션
+                        (실제 통계 데이터가 아니라 입력한 가정치 기반 추정)
 
 사용법: 표준입력(stdin)으로 JSON을 받아서 표준출력(stdout)으로 JSON 결과를 냅니다.
     echo '{"domain": "thermal_1d", "params": {...}}' | python3 simulate.py
@@ -211,10 +213,85 @@ def simulate_mechanical_beam(p):
     }
 
 
+def simulate_risk_probability(p):
+    """위험 요인 조합에 따른 사건 발생 확률을 몬테카를로 시뮬레이션으로 추정.
+
+    중요: 실제 통계 데이터를 쓰는 게 아니라, 사용자/AI가 입력한 "이 요인이
+    위험을 몇 배 높인다"는 가정(odds_multiplier)을 바탕으로 계산합니다.
+    결과는 그 가정이 맞다는 전제 하의 이론적 추정치일 뿐입니다.
+
+    params:
+      trials: 시행 횟수 (기본 100000)
+      base_probability: 아무 위험 요인 없을 때 기본 발생 확률 (0~1)
+      factors: [
+        {
+          "name": "빗길",
+          "odds_multiplier": 2.5,      # 이 요인이 있으면 승산(odds)이 몇 배가 되는지 가정
+          "uncertainty_pct": 20,        # 그 가정치의 불확실성 (±%, 몬테카를로에서 흔들어줌)
+          "prevalence": 1.0             # 이 시나리오에서 이 요인이 적용될 확률 (0~1, 기본 1=항상 적용)
+        }, ...
+      ]
+    """
+    trials = int(p.get("trials", 100000))
+    base_p = float(p["base_probability"])
+    base_p = min(max(base_p, 1e-6), 1 - 1e-6)
+    base_logit = np.log(base_p / (1 - base_p))
+
+    factors = p.get("factors", [])
+    rng = np.random.default_rng(42)
+
+    logits = np.full(trials, base_logit)
+    factor_summ = []
+
+    for f in factors:
+        mult = float(f["odds_multiplier"])
+        unc = float(f.get("uncertainty_pct", 0)) / 100.0
+        prevalence = float(f.get("prevalence", 1.0))
+
+        active = rng.random(trials) < prevalence
+        # 가정치 자체도 불확실하다고 보고, 로그정규분포로 흔들어줌
+        sampled_mult = rng.normal(mult, mult * unc, trials) if unc > 0 else np.full(trials, mult)
+        sampled_mult = np.clip(sampled_mult, 1e-3, None)
+
+        logits += np.where(active, np.log(sampled_mult), 0.0)
+        factor_summ.append({
+            "name": f.get("name", "요인"),
+            "assumed_odds_multiplier": mult,
+            "applied_in_pct_of_trials": round(float(active.mean() * 100), 1),
+        })
+
+    probs = 1 / (1 + np.exp(-logits))
+    outcomes = rng.random(trials) < probs
+
+    overall = float(outcomes.mean())
+    # 90% 신뢰구간은 시행을 100개 배치로 나눠 배치별 비율의 5~95 백분위로 근사
+    batch_size = max(1, trials // 100)
+    n_batches = trials // batch_size
+    batch_rates = outcomes[: n_batches * batch_size].reshape(n_batches, batch_size).mean(axis=1)
+    ci_low, ci_high = np.percentile(batch_rates, [5, 95])
+
+    hist_counts, hist_edges = np.histogram(probs, bins=12, range=(0, 1))
+
+    return {
+        "domain": "risk_probability",
+        "trials": trials,
+        "overall_probability_pct": round(overall * 100, 2),
+        "ci_90_low_pct": round(float(ci_low) * 100, 2),
+        "ci_90_high_pct": round(float(ci_high) * 100, 2),
+        "factor_breakdown": factor_summ,
+        "probability_histogram": {
+            "bin_edges_pct": [round(float(e) * 100, 1) for e in hist_edges],
+            "counts": [int(c) for c in hist_counts],
+        },
+        "note": "실제 통계가 아니라 입력된 가정치(odds_multiplier) 기반 몬테카를로 추정치입니다. 가정이 달라지면 결과도 크게 달라집니다.",
+    }
+
+
 DOMAINS = {
     "thermal_1d": simulate_thermal_1d,
     "electrical_dc": simulate_electrical_dc,
     "mechanical_beam": simulate_mechanical_beam,
+    "risk_probability": simulate_risk_probability,
 }
 
 
