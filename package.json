@@ -1,0 +1,20 @@
+{
+  "name": "omnicontext-backend",
+  "version": "0.1.0",
+  "description": "공학자/엔지니어를 위한 실시간 리서치 자동 업데이트 AI 앱 - 백엔드",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "xml2js": "^0.6.2"
+  }
+}
