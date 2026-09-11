@@ -43,6 +43,25 @@ router.delete('/:id', (req, res) => {
   res.status(204).send();
 });
 
+// 자동 조사 켜기/끄기 토글
+router.patch('/:id/active', (req, res) => {
+  const { active } = req.body; // true 또는 false
+  const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(req.params.id);
+  if (!topic) return res.status(404).json({ error: '주제를 찾을 수 없습니다.' });
+
+  db.prepare('UPDATE topics SET active = ? WHERE id = ?').run(active ? 1 : 0, req.params.id);
+  res.json({ id: Number(req.params.id), active: !!active });
+});
+
+// "이미 확인한 논문" 기록 초기화 (막혔던 주제를 처음부터 다시 조사하게 하고 싶을 때)
+router.post('/:id/reset-seen', (req, res) => {
+  const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(req.params.id);
+  if (!topic) return res.status(404).json({ error: '주제를 찾을 수 없습니다.' });
+
+  const result = db.prepare('DELETE FROM seen_sources WHERE topic_id = ?').run(req.params.id);
+  res.json({ id: Number(req.params.id), cleared: result.changes });
+});
+
 // 수동으로 지금 바로 확인시키기 (스케줄러 기다리지 않고 테스트용)
 router.post('/:id/check-now', async (req, res) => {
   const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(req.params.id);

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS topics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   keywords TEXT NOT NULL,        -- 검색에 쓸 키워드 (쉼표 구분)
+  active INTEGER DEFAULT 1,      -- 1이면 자동 조사 켜짐, 0이면 꺼짐
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -57,5 +58,11 @@ CREATE TABLE IF NOT EXISTS update_log (
   FOREIGN KEY (topic_id) REFERENCES topics(id)
 );
 `);
+
+// 마이그레이션: 이미 배포된 DB에 topics 테이블이 있지만 active 컬럼이 없는 경우 추가
+const topicColumns = db.prepare("PRAGMA table_info(topics)").all().map((c) => c.name);
+if (!topicColumns.includes('active')) {
+  db.exec('ALTER TABLE topics ADD COLUMN active INTEGER DEFAULT 1');
+}
 
 export default db;
