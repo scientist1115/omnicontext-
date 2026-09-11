@@ -43,6 +43,28 @@ router.delete('/:id', (req, res) => {
   res.status(204).send();
 });
 
+// 주제의 최근 시뮬레이션 결과 목록 조회
+router.get('/:id/simulations', (req, res) => {
+  const topic = db.prepare('SELECT * FROM topics WHERE id = ?').get(req.params.id);
+  if (!topic) return res.status(404).json({ error: '주제를 찾을 수 없습니다.' });
+
+  const rows = db
+    .prepare('SELECT * FROM simulations WHERE topic_id = ? ORDER BY created_at DESC LIMIT 20')
+    .all(req.params.id);
+
+  const simulations = rows.map((r) => ({
+    id: r.id,
+    source_title: r.source_title,
+    source_url: r.source_url,
+    domain: r.domain,
+    reasoning: r.reasoning,
+    result: JSON.parse(r.result_json),
+    created_at: r.created_at,
+  }));
+
+  res.json(simulations);
+});
+
 // 자동 조사 켜기/끄기 토글
 router.patch('/:id/active', (req, res) => {
   const { active } = req.body; // true 또는 false

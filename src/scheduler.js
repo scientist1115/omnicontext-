@@ -38,6 +38,13 @@ export async function runTopicCheck(topic) {
           console.log(`[스케줄러] "${source.title}" 시뮬레이션 실행 중 (${spec.domain})`);
           const result = await runSimulation({ domain: spec.domain, params: spec.params });
           source.simulation = { simulatable: true, domain: spec.domain, reasoning: spec.reasoning, result };
+
+          if (!result.error) {
+            db.prepare(
+              `INSERT INTO simulations (topic_id, source_title, source_url, domain, reasoning, result_json)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            ).run(topic.id, source.title, source.url, spec.domain, spec.reasoning, JSON.stringify(result));
+          }
         } else {
           source.simulation = { simulatable: false, reasoning: spec.reasoning || '해당 도메인 아님' };
         }

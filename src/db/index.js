@@ -57,6 +57,18 @@ CREATE TABLE IF NOT EXISTS update_log (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (topic_id) REFERENCES topics(id)
 );
+
+CREATE TABLE IF NOT EXISTS simulations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic_id INTEGER NOT NULL,
+  source_title TEXT,
+  source_url TEXT,
+  domain TEXT NOT NULL,          -- thermal_1d | electrical_dc | mechanical_beam
+  reasoning TEXT,
+  result_json TEXT NOT NULL,     -- 시뮬레이터 출력 결과 (JSON 문자열)
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (topic_id) REFERENCES topics(id)
+);
 `);
 
 // 마이그레이션: 이미 배포된 DB에 topics 테이블이 있지만 active 컬럼이 없는 경우 추가
